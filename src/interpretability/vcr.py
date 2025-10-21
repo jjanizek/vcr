@@ -60,6 +60,7 @@ class ConceptAnalyzer:
             clip_embedder: CLIP embedder for computing concept embeddings
             image_processor: Optional image processor (will use model's if not provided)
         """
+        
         self.model = FlamingoAPI(model_name=model_name)
         self.model_name = model_name
         self.clip = clip_embedder
