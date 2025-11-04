@@ -179,11 +179,11 @@ def prepare_image_paths(config, seed=0):
         config: Experiment configuration
         seed: Random seed to use (default 0 for seed_0 folder similarity matrix)
     """
-    metadata_path = config['config']['metadata_path']
-    base_dir = config['config']['ddi_base_dir']
-    test_size = config['config']['test_size']
-    demo_size = config['config']['demo_size']
-    use_demos = config['config']['prompt'].get('use_demos', False)
+    metadata_path = config['metadata_path']
+    base_dir = config['data_base_dir']
+    test_size = config['test_size']
+    demo_size = config['demo_size']
+    use_demos = config['prompt_config'].get('use_demos', False)
     
     # Load metadata
     df = pd.read_csv(metadata_path, index_col=0)
@@ -313,7 +313,10 @@ def main(results_dir, n_concepts=20, n_images=7):
 
 if __name__ == "__main__":
     # Set your experiment directory here
-    results_dir = '/home/joseph/vcr/src/experiments/OpenFlamingo3BI_DDI_ZS_LastLayer_pvalue_noswears/'
+    results_dirs = '/home/groups/roxanad/sonnet/vcr/results'
     
-    # Run analysis
-    main(results_dir, n_concepts=20, n_images=7)
+    # Run analysis on all results in results_dir
+    for results_dir in os.listdir(results_dirs):
+        full_path = os.path.join(results_dirs, results_dir)
+        if os.path.isdir(full_path) and not os.pathexists(full_path, 'analysis_outputs'):
+            main(full_path, n_concepts=20, n_images=7)

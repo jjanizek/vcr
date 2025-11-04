@@ -290,10 +290,10 @@ def main():
             results_dir='OF3B_DDI_ICL_concepts',
             layer_name=layer_name,
             model_name='OpenFlamingo-3B-Instruct',
-            metadata_path='/your/path/to/ddi/ddidiversedermatologyimages/ddi_metadata.csv',
-            ddi_base_dir="/your/path/to/ddi/ddidiversedermatologyimages/",
-            concept_files=['/your/path/to/concept_sets/20k.txt',
-                           '/your/path/to/concept_sets/skincon.txt'],
+            metadata_path='/home/joseph/datasets/ddi/ddidiversedermatologyimages/ddi_metadata.csv',
+            ddi_base_dir="/home/joseph/datasets/ddi/ddidiversedermatologyimages/",
+            concept_files=['/home/joseph/vlm-interp/src/concept_sets/20k.txt',
+                           '/home/joseph/vlm-interp/src/concept_sets/skincon.txt'],
         )
         
         exp_config_dict = asdict(exp_conf)

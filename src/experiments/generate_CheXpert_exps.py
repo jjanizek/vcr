@@ -430,9 +430,9 @@ def main():
     base_config = {
         'results_dir': 'OpenFlamingo4B_CheXpert_ZS_residualStream', ## give a descriptive name of the results, and probably save to Oak/scratch
         'model_name': 'OpenFlamingo-4B', ## specify the model name here, if you change this, you will need to change the layer names too
-        'metadata_path': '/your/path/to/chexpertchestxrays-u20210408/CheXpert-v1.0/train.csv',
-        'chexpert_base_dir': '/your/path/to/chexpertchestxrays-u20210408/',
-        'concept_files': ['/your/path/to/concept_sets/20k.txt'],
+        'metadata_path': '/home/joseph/datasets/chexpertchestxrays-u20210408/CheXpert-v1.0/train.csv',
+        'chexpert_base_dir': '/home/joseph/datasets/chexpertchestxrays-u20210408/',
+        'concept_files': ['/home/joseph/vlm-interp/src/concept_sets/20k.txt'],
     }
                         
     # layer names for OpenFlamingo-4B

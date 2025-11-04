@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0" 
 import sys
 import json
 import argparse
@@ -11,10 +11,8 @@ from tqdm import tqdm
 import pickle
 
 # Add parent directory to path
-# this first approach works locally on my lambda server
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 # this second one is for sherlock
-# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from interpretability.vcr import (
     ConceptAnalyzer, 
@@ -293,12 +291,12 @@ def main():
     
     # Paths and model configuration
     base_config = {
-        'results_dir': 'MedGemma4BI_DDI_ZS_LastLayer_pvalue_noswears', ## descriptive name for seed stability experiment
-        'model_name': 'MedGemma-4B-IT',
-        'metadata_path': '/home/joseph/datasets/ddi/ddidiversedermatologyimages/ddi_metadata.csv',
-        'ddi_base_dir': "/home/joseph/datasets/ddi/ddidiversedermatologyimages/",
-        'concept_files': ['/home/joseph/vlm-interp/src/concept_sets/google-10000-english-no-swears.txt',
-                          '/home/joseph/vlm-interp/src/concept_sets/skincon.txt'],
+        'results_dir': 'MedFlamingo_DDI_ZS_LastLayer_pvalue_noswears', ## descriptive name for seed stability experiment
+        'model_name': 'OpenFlamingo-3B-Instruct',
+        'metadata_path': '/scratch/users/sonnet/ddi/ddi_metadata.csv',
+        'ddi_base_dir': "/scratch/users/sonnet/ddi",
+        'concept_files': ['/home/groups/roxanad/sonnet/vcr/src/concept_sets/google-10000-english-no-swears.txt',
+                          '/home/groups/roxanad/sonnet/vcr/src/concept_sets/medical.txt'],
     }
     
     # Just the last layer for OpenFlamingo-4B

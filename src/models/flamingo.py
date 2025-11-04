@@ -42,8 +42,7 @@ class FlamingoAPI:
         }
         
         if model_name == 'MedFlamingo':
-            # >>> add your local path to Llama-7B (v1) model here:
-            llama_path = 'your/local/path/to/decapoda-research-llama-7B-hf'
+            llama_path = '/home/groups/roxanad/flamingos/decapoda-research-llama-7B-hf'
             if not os.path.exists(llama_path):
                 raise ValueError('Llama model not yet set up, please check README for instructions!')
             
@@ -57,7 +56,7 @@ class FlamingoAPI:
             )
             
             # load med-flamingo checkpoint:
-            checkpoint_path = hf_hub_download("med-flamingo/med-flamingo", "model.pt", local_files_only=True, cache_dir="/your/path/to/the/cache/dir")
+            checkpoint_path = hf_hub_download("med-flamingo/med-flamingo", "model.pt", local_files_only=False, cache_dir="/home/groups/roxanad/flamingos")
             print(f'Downloaded Med-Flamingo checkpoint to {checkpoint_path}')
             self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device), strict=False)
             
@@ -76,7 +75,7 @@ class FlamingoAPI:
             )
         
             # Load checkpoint and prepare model
-            checkpoint = hf_hub_download(init_dict[model_name]['checkpoint_path'], "checkpoint.pt", local_files_only=True)
+            checkpoint = hf_hub_download(init_dict[model_name]['checkpoint_path'], "checkpoint.pt", local_files_only=False)
             self.model.load_state_dict(torch.load(checkpoint, map_location=self.device), strict=False)
             
             # Configure tokenizer
