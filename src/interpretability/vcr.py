@@ -423,7 +423,8 @@ class ConceptAnalyzer:
     
     def calculate_directional_derivatives(self, dataset, concept_vectors, 
                                         concept_weights, prompt_template,
-                                        completion, demo_paths=None, demo_labels=None):
+                                        completion, task_score='contrastive',
+                                        demo_paths=None, demo_labels=None):
         """
         Calculate weighted directional derivatives for concepts.
         
@@ -466,12 +467,6 @@ class ConceptAnalyzer:
         for batch in tqdm(dataloader, desc="Calculating sensitivities"):
             torch.cuda.empty_cache()
             
-            # Hook to collect layer outputs
-            layer_outputs = []
-            def hook_fn(module, input, output):
-                layer_outputs.append(output)
-            hook = self.wrapped_layer.register_forward_hook(hook_fn)
-            
             image_batch = batch['image'].cuda()
             if len(image_batch.shape) == 4:
                 image_batch = image_batch.unsqueeze(1).unsqueeze(2)
@@ -481,40 +476,108 @@ class ConceptAnalyzer:
             
             prompt_batch = [prompt]
             
-            # Compute choice difference
-            outputs = self.compute_model_outputs(
-                image_batch, prompt_batch, completion
-            )
-            
-            # Compute gradient
-            activation_grad = torch.autograd.grad(
-                outputs=outputs,
-                inputs=layer_outputs[-1][0],
-                create_graph=False,
-                retain_graph=False
-            )[0]
-            
-            hook.remove()
-            
-            # Flatten gradient
-            flattened_grad = activation_grad.view(activation_grad.size(1), -1)
-            
-            # Compute directional derivatives
-            raw_sensitivities = torch.matmul(flattened_grad, concept_vectors.T)
-            weighted_sensitivities = raw_sensitivities * concept_weights.unsqueeze(0)
-            
-            # Store results for final token
-            all_raw_sensitivities.append(
-                raw_sensitivities.cpu().detach().numpy()[final_tok_position, :]
-            )
-            all_weighted_sensitivities.append(
-                weighted_sensitivities.cpu().detach().numpy()[final_tok_position, :]
-            )
-            
-            # At the end of each batch:
-            del activation_grad, raw_sensitivities, weighted_sensitivities
-            del layer_outputs[:]  # Clear the list
-            torch.cuda.empty_cache()
+            if task_score == 'contrastive':
+                # === First forward pass: malignant ===
+                layer_outputs_malignant = []
+                def hook_fn_malignant(module, input, output):
+                    layer_outputs_malignant.append(output)
+                hook_malignant = self.wrapped_layer.register_forward_hook(hook_fn_malignant)
+                
+                log_prob_malignant = self.compute_model_outputs(
+                    image_batch, prompt_batch, " malignant"
+                )
+                
+                activation_grad_malignant = torch.autograd.grad(
+                    outputs=log_prob_malignant,
+                    inputs=layer_outputs_malignant[-1][0],
+                    create_graph=False,
+                    retain_graph=False
+                )[0]
+                
+                hook_malignant.remove()
+                
+                # === Second forward pass: benign ===
+                layer_outputs_benign = []
+                def hook_fn_benign(module, input, output):
+                    layer_outputs_benign.append(output)
+                hook_benign = self.wrapped_layer.register_forward_hook(hook_fn_benign)
+                
+                log_prob_benign = self.compute_model_outputs(
+                    image_batch, prompt_batch, " benign"
+                )
+                
+                activation_grad_benign = torch.autograd.grad(
+                    outputs=log_prob_benign,
+                    inputs=layer_outputs_benign[-1][0],
+                    create_graph=False,
+                    retain_graph=False
+                )[0]
+                
+                hook_benign.remove()
+                
+                # === Combine gradients for contrastive effect ===
+                # ∂(log_prob_malignant - log_prob_benign)/∂activations
+                contrastive_grad = activation_grad_malignant - activation_grad_benign
+                # Flatten gradient
+                flattened_grad = contrastive_grad.view(contrastive_grad.size(1), -1)
+                
+                # Compute directional derivatives
+                raw_sensitivities = torch.matmul(flattened_grad, concept_vectors.T)
+                weighted_sensitivities = raw_sensitivities * concept_weights.unsqueeze(0)
+                
+                # Store results for final token
+                all_raw_sensitivities.append(
+                    raw_sensitivities.cpu().detach().numpy()[final_tok_position, :]
+                )
+                all_weighted_sensitivities.append(
+                    weighted_sensitivities.cpu().detach().numpy()[final_tok_position, :]
+                )
+                
+                del activation_grad_benign, activation_grad_malignant, raw_sensitivities, weighted_sensitivities
+                del layer_outputs_benign[:] 
+                del layer_outputs_malignant[:]
+                torch.cuda.empty_cache()
+            elif task_score == "malignant_prob":
+                # Hook to collect layer outputs
+                layer_outputs = []
+                def hook_fn(module, input, output):
+                    layer_outputs.append(output)
+                hook = self.wrapped_layer.register_forward_hook(hook_fn)
+                
+                # Compute choice difference
+                outputs = self.compute_model_outputs(
+                    image_batch, prompt_batch, completion
+                )
+                
+                # Compute gradient
+                activation_grad = torch.autograd.grad(
+                    outputs=outputs,
+                    inputs=layer_outputs[-1][0],
+                    create_graph=False,
+                    retain_graph=False
+                )[0]
+                
+                hook.remove()
+                
+                # Flatten gradient
+                flattened_grad = activation_grad.view(activation_grad.size(1), -1)
+                
+                # Compute directional derivatives
+                raw_sensitivities = torch.matmul(flattened_grad, concept_vectors.T)
+                weighted_sensitivities = raw_sensitivities * concept_weights.unsqueeze(0)
+                
+                # Store results for final token
+                all_raw_sensitivities.append(
+                    raw_sensitivities.cpu().detach().numpy()[final_tok_position, :]
+                )
+                all_weighted_sensitivities.append(
+                    weighted_sensitivities.cpu().detach().numpy()[final_tok_position, :]
+                )
+                
+                # At the end of each batch:
+                del activation_grad, raw_sensitivities, weighted_sensitivities
+                del layer_outputs[:]  # Clear the list
+                torch.cuda.empty_cache()
         
         # Stack results
         all_weighted = np.vstack(all_weighted_sensitivities)

@@ -318,5 +318,6 @@ if __name__ == "__main__":
     # Run analysis on all results in results_dir
     for results_dir in os.listdir(results_dirs):
         full_path = os.path.join(results_dirs, results_dir)
-        if os.path.isdir(full_path) and not os.pathexists(full_path, 'analysis_outputs'):
+        analysis_path = os.path.join(full_path, 'analysis_outputs')
+        if os.path.isdir(full_path) and not os.path.exists(analysis_path):
             main(full_path, n_concepts=20, n_images=7)

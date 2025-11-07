@@ -31,134 +31,6 @@ from einops import repeat
 from torch.utils.data import DataLoader
 from datasets.ddi import DDIDataLoader
 
-
-# ============================================================================
-# TASK DEFINITIONS - Define different scoring functions
-# ============================================================================
-
-class TaskScorer(ABC):
-    """Abstract base class for task scoring functions."""
-    
-    @abstractmethod
-    def compute_score(self, analyzer, image_batch, prompt_batch, **kwargs) -> float:
-        """
-        Compute task-specific score.
-        
-        Args:
-            analyzer: ConceptAnalyzer instance with model
-            image_batch: Preprocessed image tensors
-            prompt_batch: List of prompt strings
-            **kwargs: Additional arguments (e.g., labels, token IDs)
-        """
-        pass
-    
-    @abstractmethod
-    def get_completion_token(self) -> str:
-        """Return the completion token for directional derivatives."""
-        pass
-
-
-class MalignantProbScorer(TaskScorer):
-    """Score = P(malignant) = exp(log P(malignant))"""
-    
-    def compute_score(self, analyzer, image_batch, prompt_batch, **kwargs) -> float:
-        with torch.no_grad():
-            # Get length-normalized log probability for " malignant"
-            log_prob_malignant = analyzer.compute_model_outputs(
-                image_batch, 
-                prompt_batch, 
-                " malignant"
-            )
-            # Convert to probability
-            prob = torch.exp(log_prob_malignant).item()
-            return prob
-    
-    def get_completion_token(self) -> str:
-        return " malignant"
-
-
-class ContrastiveScorer(TaskScorer):
-    """Score = log P(malignant) - log P(benign)"""
-    
-    def compute_score(self, analyzer, image_batch, prompt_batch, **kwargs) -> float:
-        with torch.no_grad():
-            # Get log probabilities for both completions
-            log_prob_malignant = analyzer.compute_model_outputs(
-                image_batch, prompt_batch, " malignant"
-            )
-            log_prob_benign = analyzer.compute_model_outputs(
-                image_batch, prompt_batch, " benign"
-            )
-            # Return difference (this is the log odds ratio)
-            choice_diff = (log_prob_malignant - log_prob_benign).item()
-            return choice_diff
-    
-    def get_completion_token(self) -> str:
-        return " malignant"
-
-
-class BCELossScorer(TaskScorer):
-    """Score = -BCELoss(y_pred, y_true)
-    
-    Uses the log probability ratio as the logit for BCE loss.
-    """
-    
-    def __init__(self):
-        self.bce = torch.nn.BCEWithLogitsLoss(reduction='none')
-    
-    def compute_score(self, analyzer, image_batch, prompt_batch, **kwargs) -> float:
-        with torch.no_grad():
-            # Get log probabilities for both completions
-            log_prob_malignant = analyzer.compute_model_outputs(
-                image_batch, prompt_batch, " malignant"
-            )
-            log_prob_benign = analyzer.compute_model_outputs(
-                image_batch, prompt_batch, " benign"
-            )
-            
-            # The log odds ratio: log(P(mal)/P(ben)) = log P(mal) - log P(ben)
-            # This is the natural logit to use for binary classification
-            logit = log_prob_malignant - log_prob_benign
-            
-            # Get true label from kwargs
-            label_value = kwargs.get('label')
-            
-            # Handle different label formats - convert to binary
-            if isinstance(label_value, str):
-                # Convert string label to binary
-                binary_label = 1.0 if 'malignant' in label_value.lower() else 0.0
-            elif isinstance(label_value, bool):
-                binary_label = float(label_value)
-            elif isinstance(label_value, (int, float)):
-                binary_label = float(label_value)
-            else:
-                # Default to malignant if unclear
-                print(f"Warning: unclear label format {label_value}, defaulting to 1")
-                binary_label = 1.0
-            
-            # Ensure proper shapes for BCE
-            if logit.dim() == 0:
-                logit = logit.unsqueeze(0)
-            
-            true_label = torch.tensor([binary_label], 
-                                     device=logit.device, 
-                                     dtype=logit.dtype)
-            
-            # Compute negative BCE (higher is better)
-            loss = -self.bce(logit, true_label).item()
-            return loss
-    
-    def get_completion_token(self) -> str:
-        return " malignant"
-
-
-# Task registry
-TASK_SCORERS = {
-    'malignant_prob': MalignantProbScorer,
-    'contrastive': ContrastiveScorer,
-    'bce_loss': BCELossScorer,
-}
-
 # ============================================================================
 # MODEL WRAPPERS - Abstract different VLMs
 # ============================================================================
@@ -250,7 +122,6 @@ VLM_MODELS = {
     'medgemma': lambda: GemmaWrapper("MedGemma"),
     'medflamingo': lambda: FlamingoWrapper("MedFlamingo"),
 }
-
 
 # ============================================================================
 # PROMPT TEMPLATES - Different prompting strategies
@@ -353,6 +224,41 @@ class ConceptLibrary:
         """Create custom concept set."""
         return ConceptSetConfig(name=name, files=files)
 
+@dataclass
+class TaskDefinition:
+    """Configuration for a single task definition."""
+    score_type: str  # 'contrastive' or 'malignant_prob'
+    completion: Optional[str] = None  # For single completion tasks
+    completion_a: Optional[str] = None  # For contrastive tasks
+    completion_b: Optional[str] = None  # For contrastive tasks
+    
+    def __post_init__(self):
+        """Validate task definition."""
+        if self.score_type == 'contrastive':
+            if self.completion_a is None or self.completion_b is None:
+                raise ValueError("Contrastive tasks require both completion_a and completion_b")
+        elif self.score_type == 'malignant_prob':
+            if self.completion is None:
+                raise ValueError("Single completion tasks require completion")
+        else:
+            raise ValueError(f"Unknown score_type: {self.score_type}")
+
+TASK_DEFINITIONS = {
+    'contrastive_malignant_benign': TaskDefinition(
+        score_type='contrastive',
+        completion_a=' malignant',
+        completion_b=' benign'
+    ),
+    'malignant_prob': TaskDefinition(
+        score_type='malignant_prob',
+        completion=' malignant'
+    ),
+    'contrastive_yes_no': TaskDefinition(
+        score_type='contrastive',
+        completion_a=' yes',
+        completion_b=' no'
+    ),
+}
 
 # ============================================================================
 # EXPERIMENT CONFIGURATION
@@ -370,14 +276,13 @@ class ExperimentConfig:
     model_key: str  # Key in VLM_MODELS registry
     layer_position: str = "last"  # or specific layer name
     
-    # Task configuration
-    task_scorer_key: str = "contrastive"  # Key in TASK_SCORERS registry
-    
     # Prompt configuration
     prompt_config: PromptConfig = field(default_factory=PromptLibrary.ddi_binary_classification)
+    completion_token = " malignant"
     
     # Concept configuration
     concept_set: ConceptSetConfig = field(default_factory=ConceptLibrary.english)
+    task_definition: TaskDefinition = field(default_factory=lambda: TASK_DEFINITIONS['contrastive_malignant_benign'])
     
     # Data configuration
     metadata_path: str = ""
@@ -395,7 +300,6 @@ class ExperimentConfig:
         return self.layer_position
     
     def to_dict(self) -> Dict:
-        """Convert to dictionary for JSON serialization."""
         d = asdict(self)
         # Convert non-serializable fields
         d['prompt_config'] = asdict(self.prompt_config)
@@ -418,7 +322,8 @@ class VCRExperimentRunner:
         # Initialize components
         self.clip = CLIPEmbedder()
         self.model_wrapper = VLM_MODELS[config.model_key]()
-        self.task_scorer = TASK_SCORERS[config.task_scorer_key]()
+
+        self.completion_token = config.completion_token
         
         # Save configuration
         self._save_config()
@@ -494,13 +399,11 @@ class VCRExperimentRunner:
         with open(seed_dir / 'concept_texts.json', 'w') as f:
             json.dump(concept_texts, f)
         
-        # Compute task scores using the configured scorer
-        print(f"Computing task scores with {self.config.task_scorer_key}...")
         choice_differences = []
-        
+
         dataloader = DataLoader(train_dataset, batch_size=1, shuffle=False)
         analyzer.model.model.eval()
-        
+
         for batch in tqdm(dataloader, desc="Computing scores"):
             image_batch = batch['image'].cuda()
             if len(image_batch.shape) == 4:
@@ -513,19 +416,35 @@ class VCRExperimentRunner:
                 image_batch = torch.cat([stacked_demos.cuda(), image_batch], axis=1)
             
             prompt_batch = [prompt_template.build_prompt(demo_labels if demo_labels else None)]
-            
-            # Use task scorer
-            score = self.task_scorer.compute_score(
-                analyzer,
-                image_batch,
-                prompt_batch,
-                label=batch.get('label', 1)
-            )
-            choice_differences.append(score)
-        
+                       
+            with torch.no_grad():
+                if self.config.task_definition.score_type == 'contrastive':
+                    completion_a = self.config.task_definition.completion_a
+                    completion_b = self.config.task_definition.completion_b
+                    
+                    # Compute log probabilities for both completions
+                    log_prob_a = analyzer.compute_model_outputs(
+                        image_batch, prompt_batch, completion_a
+                    ).item()
+                    
+                    log_prob_b = analyzer.compute_model_outputs(
+                        image_batch, prompt_batch, completion_b
+                    ).item()
+                    
+                    choice_diff = log_prob_a - log_prob_b
+                    
+                elif self.config.task_definition.score_type == 'malignant_prob':
+                    completion = self.config.task_definition.completion
+                    choice_diff = analyzer.compute_model_outputs(
+                        image_batch, prompt_batch, completion
+                    ).item()
+                
+                choice_differences.append(choice_diff)
+
+        # Convert lists to arrays and save separately for each task
         choice_differences = np.array(choice_differences)
-        np.save(seed_dir / 'choice_differences.npy', choice_differences)
-        
+        np.save(seed_dir / f'{self.config.task_definition.score_type}_choice_differences.npy', choice_differences)
+
         # Collect activations
         print("Collecting activations...")
         activations = analyzer.collect_activations(
@@ -547,15 +466,15 @@ class VCRExperimentRunner:
         concept_vectors = analyzer.extract_concept_vectors()
         concept_weights = analyzer.compute_concept_weights(sim_matrix)
         
-        completion_token = self.task_scorer.get_completion_token()
         weighted_sens, raw_sens = analyzer.calculate_directional_derivatives(
             train_dataset,
             concept_vectors,
             concept_weights,
             prompt_template,
-            completion_token,
+            self.completion_token,
             demo_paths=demo_paths,
-            demo_labels=demo_labels
+            demo_labels=demo_labels,
+            task_score=self.config.task_definition.score_type
         )
         
         # Save results
@@ -609,8 +528,8 @@ def main():
         results_dir="results/flamingo3b_contrastive_english",
         model_key="flamingo-3b-instruct",
         layer_position="last",
-        task_scorer_key="contrastive",
         prompt_config=PromptLibrary.ddi_binary_classification(),
+        task_definition=TASK_DEFINITIONS["contrastive_malignant_benign"],
         concept_set=ConceptLibrary.english(),
         metadata_path='/scratch/users/sonnet/ddi/ddi_metadata.csv',
         data_base_dir="/scratch/users/sonnet/ddi",
@@ -619,23 +538,6 @@ def main():
     
     runner = VCRExperimentRunner(baseline_config)
     runner.run_all_seeds()
-    
-    # Baseline experiment with BCE scoring
-    bce_config = ExperimentConfig(
-        name="baseline_bce",
-        results_dir="results/flamingo3b_bce_english",
-        model_key="flamingo-3b-instruct",
-        layer_position="last",
-        task_scorer_key="bce_loss",
-        prompt_config=PromptLibrary.ddi_binary_classification(),
-        concept_set=ConceptLibrary.english(),
-        metadata_path='/scratch/users/sonnet/ddi/ddi_metadata.csv',
-        data_base_dir="/scratch/users/sonnet/ddi",
-        random_seeds=list(range(25))
-    )
-    
-    runner2 = VCRExperimentRunner(bce_config)
-    runner2.run_all_seeds()
 
     # Baseline experiment with malignant prob
     malignant_prob_config = ExperimentConfig(
@@ -643,8 +545,8 @@ def main():
         results_dir="results/flamingo3b_malignant_prob_english",
         model_key="flamingo-3b-instruct",
         layer_position="last",
-        task_scorer_key="malignant_prob",
         prompt_config=PromptLibrary.ddi_binary_classification(),
+        task_definition=TASK_DEFINITIONS["malignant_prob"],
         concept_set=ConceptLibrary.english(),
         metadata_path='/scratch/users/sonnet/ddi/ddi_metadata.csv',
         data_base_dir="/scratch/users/sonnet/ddi",
