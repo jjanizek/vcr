@@ -482,6 +482,16 @@ class VCRExperimentRunner:
         np.save(seed_dir / 'raw_sens.npy', raw_sens)
         np.save(seed_dir / 'concept_weights.npy', concept_weights)
         np.save(seed_dir / 'r2_scores.npy', r2_scores)
+
+        results = analyzer.image_comparison_from_paths(
+            base_paths = [str(f) for f in Path('concept_exp_images/original').glob('*.png')],
+            alt_paths = [str(f) for f in Path('concept_exp_images/removed').glob('*.png')],
+            prompt_template=prompt_template,  
+            completion=" malignant",
+        )
+
+        # Inspect results
+        print(results['diffs'])         # Differences between alt and base outputs
         
         return concept_texts, weighted_sens
     
@@ -533,28 +543,11 @@ def main():
         concept_set=ConceptLibrary.medical_only(),
         metadata_path='/scratch/users/sonnet/ddi/ddi_metadata.csv',
         data_base_dir="/scratch/users/sonnet/ddi",
-        random_seeds=list(range(25))
+        random_seeds=list(range(1))
     )
     
     runner = VCRExperimentRunner(baseline_config)
     runner.run_all_seeds()
-
-    # Baseline experiment with malignant prob
-    malignant_prob_config = ExperimentConfig(
-        name="baseline_malignant_prob",
-        results_dir="results/flamingo3b_malignant_prob_medical",
-        model_key="flamingo-3b-instruct",
-        layer_position="last",
-        prompt_config=PromptLibrary.ddi_binary_classification(),
-        task_definition=TASK_DEFINITIONS["malignant_prob"],
-        concept_set=ConceptLibrary.medical_only(),
-        metadata_path='/scratch/users/sonnet/ddi/ddi_metadata.csv',
-        data_base_dir="/scratch/users/sonnet/ddi",
-        random_seeds=list(range(25))
-    )
-    
-    runner3 = VCRExperimentRunner(malignant_prob_config)
-    runner3.run_all_seeds()
 
 
 if __name__ == '__main__':

@@ -273,7 +273,6 @@ class ConceptAnalyzer:
         )
         
         # Train model
-#         self.concept_model = MultiOutputRegressor(Ridge(alpha=alpha))
         self.concept_model = Ridge(alpha=alpha)
         self.concept_model.fit(X_train, Y_train)
         
@@ -585,6 +584,90 @@ class ConceptAnalyzer:
         
         return all_weighted, all_raw
     
+    def image_comparison_from_paths(
+        self,
+        base_paths: list[str],
+        alt_paths: list[str],
+        prompt_template,
+        completion: str,
+        demo_paths = None,
+        demo_labels = None,
+    ):
+        """
+        Compare model outputs between two lists of image paths (base vs alternate).
+        
+        Args:
+            base_paths: List of paths to base images
+            alt_paths: List of paths to alternate images (same length/order)
+            prompt_template: Template for generating prompts
+            completion: String of completion target
+            demo_paths: Optional demonstration image paths
+            demo_labels: Optional demonstration labels
+        
+        Returns:
+            Dictionary containing comparison results
+        """
+        if self.wrapped_layer is None:
+            raise RuntimeError("No layer wrapped. Call setup_layer_hook first.")
+
+        if len(base_paths) != len(alt_paths):
+            raise ValueError("base_paths and alt_paths must be the same length.")
+
+        # Process demo images if provided
+        stacked_demos = None
+        if demo_paths is not None and demo_labels is not None:
+            processed_demos = self.process_images_for_model(demo_paths)
+            demo_batch = torch.stack(processed_demos)
+            stacked_demos = repeat(demo_batch, "d c h w -> b d 1 c h w", b=1)
+
+        # Build prompt once
+        prompt = prompt_template.build_prompt(demo_labels if demo_labels else None)
+        prompt_batch = [prompt]
+
+        results = {
+            "baseline_outputs": [],
+            "alternate_outputs": [],
+            "diffs": [],
+            "image_pairs": [],
+            "completion": completion,
+        }
+
+        self.model.model.eval()
+
+        for idx, (base_path, alt_path) in enumerate(tqdm(zip(base_paths, alt_paths), total=len(base_paths), desc="Image comparison")):
+            # Load and preprocess images
+            base_image = self.process_images_for_model([base_path])[0].unsqueeze(0).cuda()
+            alt_image = self.process_images_for_model([alt_path])[0].unsqueeze(0).cuda()
+
+            print(base_image.shape, alt_image.shape)
+            if len(base_image.shape) == 4:
+                base_image = base_image.unsqueeze(0).unsqueeze(0)
+            if len(alt_image.shape) == 4:
+                alt_image = alt_image.unsqueeze(0).unsqueeze(0)
+            print(base_image.shape, alt_image.shape)
+
+            # Optionally concatenate demo images
+            if stacked_demos is not None:
+                base_image = torch.cat([stacked_demos.cuda(), base_image], axis=1)
+                alt_image = torch.cat([stacked_demos.cuda(), alt_image], axis=1)
+
+            # Compute outputs
+            with torch.no_grad():
+                base_out = self.compute_model_outputs(base_image, prompt_batch, completion).item()
+                alt_out = self.compute_model_outputs(alt_image, prompt_batch, completion).item()
+
+            diff = alt_out - base_out
+
+            results["baseline_outputs"].append(base_out)
+            results["alternate_outputs"].append(alt_out)
+            results["diffs"].append(diff)
+            results["image_pairs"].append((base_path, alt_path))
+
+            torch.cuda.empty_cache()
+
+        return results
+
+
     def perturbation_analysis(self, dataset, concept_indices, prompt_template,
                              completion, perturbation_magnitude=0.2, demo_paths=None, 
                              demo_labels=None):
